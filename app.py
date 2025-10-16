@@ -34,11 +34,25 @@ st.markdown("""
         border-left: 4px solid #2E7D32;
         margin: 1rem 0;
     }
+    .metric-card-warning {
+        background-color: #fef2f2;
+        padding: 1.5rem;
+        border-radius: 10px;
+        border-left: 4px solid #dc2626;
+        margin: 1rem 0;
+    }
     .recommendation-box {
         background-color: #fffbeb;
         padding: 1.5rem;
         border-radius: 10px;
         border-left: 4px solid #f59e0b;
+        margin: 1rem 0;
+    }
+    .recommendation-box-danger {
+        background-color: #fef2f2;
+        padding: 1.5rem;
+        border-radius: 10px;
+        border-left: 4px solid #dc2626;
         margin: 1rem 0;
     }
     </style>
@@ -52,27 +66,32 @@ HEALTH_RECOMMENDATIONS = {
             "Continue with current care practices",
             "Maintain regular watering schedule",
             "Monitor for any changes in color or texture",
-            "Ensure adequate sunlight exposure"
+            "Ensure adequate sunlight exposure",
+            "Keep up with preventive measures"
         ]
     },
     "diseased": {
         "message": "⚠️ Disease detected in the leaf!",
         "recommendations": [
-            "Isolate affected plants to prevent spread",
-            "Remove and dispose of infected leaves properly",
-            "Consider applying appropriate fungicide or pesticide",
+            "Isolate affected plants immediately to prevent spread",
+            "Remove and dispose of infected leaves properly (do not compost)",
+            "Apply appropriate fungicide or pesticide based on disease type",
             "Improve air circulation around plants",
             "Avoid overhead watering to reduce moisture on leaves",
-            "Consult with a local agricultural expert for specific treatment"
+            "Reduce humidity if growing indoors",
+            "Sanitize gardening tools between uses",
+            "Consult with a local agricultural expert for specific treatment plan"
         ]
     },
-    "default": {
-        "message": "🔍 Analysis complete",
+    "unknown": {
+        "message": "🔍 Analysis complete - Please verify results",
         "recommendations": [
             "Review the detection results carefully",
-            "Compare with known disease patterns",
-            "Consider taking additional images for verification",
-            "Consult with agricultural experts if uncertain"
+            "Compare with known disease reference images",
+            "Consider taking additional images from different angles",
+            "Check for visible symptoms like spots, discoloration, or wilting",
+            "Consult with agricultural experts if uncertain",
+            "Monitor the plant closely over the next few days"
         ]
     }
 }
@@ -88,14 +107,40 @@ def load_model(model_path):
         return None
 
 def get_health_status(class_name):
-    """Determine health status from class name"""
+    """
+    Determine health status from class name.
+    Returns 'healthy' only if explicitly healthy, otherwise 'diseased'
+    """
     class_lower = class_name.lower()
-    if "healthy" in class_lower or "normal" in class_lower:
-        return "healthy"
-    elif "disease" in class_lower or "infected" in class_lower or "blight" in class_lower or "spot" in class_lower:
+    
+    # List of keywords that indicate healthy leaves
+    healthy_keywords = ['healthy', 'normal', 'good']
+    
+    # List of keywords that indicate diseased leaves
+    disease_keywords = [
+        'disease', 'diseased', 'infected', 'infection',
+        'blight', 'spot', 'rust', 'mold', 'mildew',
+        'wilt', 'rot', 'scab', 'canker', 'bacterial',
+        'fungal', 'viral', 'mosaic', 'leaf_curl',
+        'septoria', 'anthracnose', 'powdery', 'downy',
+        'early_blight', 'late_blight', 'target_spot',
+        'leaf_mold', 'spider_mites', 'yellow', 'brown',
+        'black', 'dead', 'dying', 'unhealthy', 'sick'
+    ]
+    
+    # Check for healthy keywords first
+    if any(keyword in class_lower for keyword in healthy_keywords):
+        # Make sure it's not a false positive like "unhealthy"
+        if not any(disease_keyword in class_lower for disease_keyword in disease_keywords):
+            return "healthy"
+    
+    # Check for disease keywords
+    if any(keyword in class_lower for keyword in disease_keywords):
         return "diseased"
-    else:
-        return "default"
+    
+    # If class name doesn't match any pattern, default to unknown
+    # This is safer than assuming healthy
+    return "unknown"
 
 def run_inference(model, image):
     """Run YOLOv8 inference on the image"""
@@ -106,12 +151,18 @@ def run_inference(model, image):
         st.error(f"Error during inference: {str(e)}")
         return None
 
-def display_recommendations(health_status):
+def display_recommendations(health_status, class_name):
     """Display health recommendations based on status"""
-    rec_data = HEALTH_RECOMMENDATIONS.get(health_status, HEALTH_RECOMMENDATIONS["default"])
+    rec_data = HEALTH_RECOMMENDATIONS.get(health_status, HEALTH_RECOMMENDATIONS["unknown"])
     
-    st.markdown('<div class="recommendation-box">', unsafe_allow_html=True)
+    box_class = "recommendation-box-danger" if health_status == "diseased" else "recommendation-box"
+    
+    st.markdown(f'<div class="{box_class}">', unsafe_allow_html=True)
     st.markdown(f"### {rec_data['message']}")
+    
+    if health_status == "diseased":
+        st.markdown(f"**Detected Condition:** {class_name}")
+    
     st.markdown("**Recommendations:**")
     for rec in rec_data['recommendations']:
         st.markdown(f"- {rec}")
@@ -137,6 +188,10 @@ def main():
         st.write("1. Choose input method")
         st.write("2. Upload/capture image")
         st.write("3. View results & recommendations")
+        st.divider()
+        
+        # Debug mode toggle
+        debug_mode = st.checkbox("🔧 Debug Mode", help="Show all model classes and detection details")
     
     # Check if model exists
     model_path = "best.pt"
@@ -153,6 +208,16 @@ def main():
         st.stop()
     
     st.success("✅ Model loaded successfully!")
+    
+    # Show model classes in debug mode
+    if debug_mode:
+        with st.sidebar:
+            st.subheader("📋 Model Classes")
+            if hasattr(model, 'names'):
+                for idx, name in model.names.items():
+                    health = get_health_status(name)
+                    emoji = "✅" if health == "healthy" else "⚠️" if health == "diseased" else "❓"
+                    st.text(f"{emoji} {idx}: {name}")
     
     # Input method selection
     st.divider()
@@ -229,40 +294,63 @@ def main():
                 metric_col1, metric_col2, metric_col3 = st.columns(3)
                 
                 with metric_col1:
-                    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                    card_class = "metric-card" if health_status != "diseased" else "metric-card-warning"
+                    st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
                     st.metric(
                         label="🏷️ Predicted Class",
-                        value=class_name.title()
+                        value=class_name.replace('_', ' ').title()
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 with metric_col2:
                     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                    conf_color = "🟢" if confidence > 0.7 else "🟡" if confidence > 0.5 else "🔴"
                     st.metric(
-                        label="📈 Confidence",
+                        label=f"{conf_color} Confidence",
                         value=f"{confidence:.2%}"
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
                 
                 with metric_col3:
-                    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                    status_emoji = "✅" if health_status == "healthy" else "⚠️"
+                    card_class = "metric-card" if health_status != "diseased" else "metric-card-warning"
+                    st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
+                    if health_status == "healthy":
+                        status_emoji = "✅"
+                        status_text = "Healthy"
+                    elif health_status == "diseased":
+                        status_emoji = "⚠️"
+                        status_text = "Diseased"
+                    else:
+                        status_emoji = "❓"
+                        status_text = "Unknown"
+                    
                     st.metric(
                         label="🩺 Health Status",
-                        value=f"{status_emoji} {health_status.title()}"
+                        value=f"{status_emoji} {status_text}"
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Debug information
+                if debug_mode:
+                    st.info(f"**Debug Info:** Class '{class_name}' → Status '{health_status}'")
                 
                 # Display all detections if multiple
                 if len(result.boxes) > 1:
                     with st.expander("📋 View All Detections"):
                         for idx, (cls, conf) in enumerate(zip(classes, confidences)):
-                            st.write(f"**Detection {idx+1}:** {result.names[int(cls)]} ({conf:.2%} confidence)")
+                            det_class = result.names[int(cls)]
+                            det_health = get_health_status(det_class)
+                            det_emoji = "✅" if det_health == "healthy" else "⚠️" if det_health == "diseased" else "❓"
+                            st.write(f"**Detection {idx+1}:** {det_emoji} {det_class} ({conf:.2%} confidence) - {det_health}")
                 
                 # Display recommendations
                 st.divider()
                 st.header("💡 Health Recommendations")
-                display_recommendations(health_status)
+                display_recommendations(health_status, class_name)
+                
+                # Additional warnings for low confidence
+                if confidence < 0.5:
+                    st.warning("⚠️ **Low Confidence Detection**: The model is uncertain about this classification. Consider taking another image with better lighting or angle.")
                 
             else:
                 st.warning("⚠️ No leaf detected in the image. Please try with a clearer image of a crop leaf.")
@@ -290,6 +378,11 @@ def main():
             - Blurry images may reduce accuracy
             - Multiple leaves may confuse detection
             - Poor lighting can affect classification
+            
+            **Understanding Results:**
+            - Green checkmark (✅) indicates healthy leaves
+            - Warning sign (⚠️) indicates diseased or problematic leaves
+            - Confidence score shows model certainty (higher is better)
             """)
 
 if __name__ == "__main__":
